@@ -1,0 +1,110 @@
+---
+title: "Practical Machine Learning Assignment"
+output: html_document
+---
+
+## Overview
+
+We perform rudimentary machine learning on the HAR (Human Activity Recognition) dataset, using the caret package for R.
+The goal is to create a model that is suitable for classifying samples in a test dataset.
+
+## Reading and cleaning the data
+
+First we load the necessary packages (caret and randomForest) and their dependencies.
+```{r}
+## load libraries
+library(lattice)
+library(ggplot2)
+library(caret)
+library(randomForest)
+```
+
+Next, we read the training and test datasets from CSV files.
+```{r}
+## read the raw data
+pmlTrain <- read.csv("pml-training.csv")
+pmlTest <- read.csv("pml-testing.csv")
+```
+
+We perform some data cleaning to make it suitable for model fitting with caret.
+First we create a timestamp field that represents both parts (seconds and microseconds) with a single numeric value.
+```{r}
+## clean the data
+# join timestamp fields into single numeric field
+pmlTrain$raw_timestamp <- pmlTrain$raw_timestamp_part_1 - 1322489606 + (.000001 * pmlTrain$raw_timestamp_part_2)
+pmlTest$raw_timestamp <- pmlTest$raw_timestamp_part_1 - 1322489606 + (.000001 * pmlTest$raw_timestamp_part_2)
+# remove the redundant columns
+pmlTrain <- pmlTrain[,-c(1,3,4,5)]
+pmlTest <- pmlTest[,-c(1,3,4,5)]
+```
+
+Next we remove columns with low variability and those that contain NA values. (Caret seems to ignore rows with NA values.)
+```{r}
+# remove the columns with near-zero variability
+{
+  nsv <- nearZeroVar(pmlTrain, saveMetrics=TRUE)
+  pmlTrain <- pmlTrain[,nsv$nzv == FALSE]
+  pmlTest <- pmlTest[,nsv$nzv == FALSE]
+}
+# remove the columns with NAs
+{
+  nas <- apply(pmlTrain, 2, anyNA)
+  for (col in length(nas):1) {
+    if (nas[col]) {
+      pmlTrain <- pmlTrain[,-col]
+      pmlTest <- pmlTest[,-col]
+    }
+  }
+}
+```
+
+## Partitioning, model creation and cross-validation
+
+We split the training data into two partitions; one for training (called pmlTrain1) and one for cross-validation (pmlTrain2).
+This allows checking out-of-sample error rate without using the scarce test data records.
+
+```{r}
+## partition the data
+set.seed(13224)
+inTrain <- createDataPartition(pmlTrain$classe, p=0.9, list=FALSE)
+pmlTrain1 <- pmlTrain[inTrain,]
+pmlTrain2 <- pmlTrain[-inTrain,]
+```
+
+We create a random forest model for the "classe" field by feeding pmlTrain1 into caret's train function with method "rf".
+Random forest is chosen because the number of predictors is large and random forest is good at discovering important predictors. (Manual tuning is not reasonable.)
+Then we calculate and evaluate the in-sample and out-of-sample error rates.
+This is done by using the predict function of caret to predict the values for classe in pmlTrain1 and 2 datasets, and comparing them with the original values.
+
+```{r}
+## training
+pmlFitRF1 <- train(classe ~ ., data=pmlTrain1, method="rf")
+
+errInSample <- mean(pmlTrain1$classe != predict(pmlFitRF1, pmlTrain1))
+errOutOfSample <- mean(pmlTrain2$classe != predict(pmlFitRF1, pmlTrain2))
+```
+
+The in-sample error rate is `r errInSample*100` % and the out-of-sample error rate is `r errOutOfSample*100` %.
+The resulting model seems suitable for obtaining the results from the test set.
+
+## Applying the model and saving the results
+
+In this step we apply the model to the pmlTest dataset to obtain the predicted classe values.
+Finally we use write.table to write each prediction into a new file suitable for uploading for submission.
+
+```{r}
+## apply the model to the original test dataset
+pmlTestClasse <- predict(pmlFitRF1, pmlTest)
+
+## save the results to files
+{
+  pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+      filename = paste0("problem_id_",i,".txt")
+      write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+  }
+  pml_write_files(as.character(pmlTestClasse))
+}
+```
